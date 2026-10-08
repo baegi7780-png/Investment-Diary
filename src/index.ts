@@ -21,7 +21,7 @@ function cookie(token:string,secure:boolean,age=604800){return `journal_session=
 async function body(r:Request){if(!r.headers.get('content-type')?.includes('application/json'))throw new Error('JSON 요청이 필요합니다');const raw=await r.text();if(raw.length>30000)throw new Error('요청이 너무 큽니다');return JSON.parse(raw)}
 async function rows<T>(db:D1Database,sql:string,...args:unknown[]){return (await db.prepare(sql).bind(...args).all<T>()).results}
 async function trades(db:D1Database,uid:string,sid?:string){return rows<Trade&Record<string,any>>(db,'SELECT * FROM transactions WHERE user_id=?'+(sid?' AND stock_id=?':''),...sid?[uid,sid]:[uid])}
-async function mutate(db:D1Database,u:User,statements:D1PreparedStatement[]){await db.batch([db.prepare('INSERT INTO write_guards VALUES (?,?)').bind(u.id,u.revision),...statements,db.prepare('DELETE FROM write_guards WHERE user_id=?').bind(u.id)])}
+async function mutate(db:D1Database,u:Pick<User,'id'|'revision'>,statements:D1PreparedStatement[]){await db.batch([db.prepare('INSERT INTO write_guards VALUES (?,?)').bind(u.id,u.revision),...statements,db.prepare('DELETE FROM write_guards WHERE user_id=?').bind(u.id)])}
 async function route(r:Request,e:Env):Promise<Response>{
   const url=new URL(r.url),path=url.pathname,method=r.method,secure=url.protocol==='https:';
   if(!path.startsWith('/api/'))return e.ASSETS.fetch(r);
@@ -87,6 +87,20 @@ async function route(r:Request,e:Env):Promise<Response>{
     return response({accountLimit:setting!.value});
   }
   if(path==='/api/community/portfolios')return method==='GET'?response(await communityPortfolios(e.DB,marketFilter(url.searchParams.get('market')))):response({error:'전체 투자현황은 조회만 가능합니다'},405);
+  if(path==='/api/community/price'){
+    if(method!=='POST')return response({error:'현재가 저장은 POST 요청을 사용하세요'},405);
+    const b=await body(r),sid=text(b.stock_id),owner=await e.DB.prepare('SELECT id,revision FROM users WHERE username=? AND active=1').bind(text(b.username,40)).first<{id:string;revision:number}>();
+    const stock=await e.DB.prepare('SELECT currency FROM stocks WHERE id=?').bind(sid).first<{currency:string}>();
+    if(!owner||!stock)return response({error:'회원 또는 종목을 찾을 수 없습니다'},404);
+    if(b.currency!==stock.currency)throw new Error('종목의 거래 통화와 입력 통화가 일치하지 않습니다');
+    if(new Decimal(position(await trades(e.DB,owner.id,sid)).quantity).lte(0))return response({error:'현재 보유 중인 종목만 현재가를 수정할 수 있습니다'},404);
+    const price=number(b.price,true),updated=now();
+    await mutate(e.DB,owner,[
+      e.DB.prepare("INSERT INTO user_price_overrides(id,user_id,stock_id,manual_price,price_mode,updated_at) VALUES (?,?,?,?,'MANUAL',?) ON CONFLICT(user_id,stock_id) DO UPDATE SET manual_price=excluded.manual_price,price_mode='MANUAL',updated_at=excluded.updated_at").bind(id(),owner.id,sid,price,updated),
+      e.DB.prepare('INSERT INTO peer_price_updates(owner_id,stock_id,editor_id,price,updated_at) VALUES (?,?,?,?,?) ON CONFLICT(owner_id,stock_id) DO UPDATE SET editor_id=excluded.editor_id,price=excluded.price,updated_at=excluded.updated_at').bind(owner.id,sid,u.id,price,updated)
+    ]);
+    return response({ok:true});
+  }
   if(path==='/api/community/records'){
     if(method!=='GET')return response({error:'공개 기록은 조회만 가능합니다'},405);
     const records=await sharedRecords(e.DB,text(url.searchParams.get('username'),40),marketFilter(url.searchParams.get('market')));
@@ -149,14 +163,15 @@ async function route(r:Request,e:Env):Promise<Response>{
     await mutate(e.DB,u,[
       e.DB.prepare('DELETE FROM transactions WHERE user_id=? AND stock_id=?').bind(u.id,sid),
       e.DB.prepare('DELETE FROM investment_notes WHERE user_id=? AND stock_id=?').bind(u.id,sid),
-      e.DB.prepare('DELETE FROM user_price_overrides WHERE user_id=? AND stock_id=?').bind(u.id,sid)
+      e.DB.prepare('DELETE FROM user_price_overrides WHERE user_id=? AND stock_id=?').bind(u.id,sid),
+      e.DB.prepare('DELETE FROM peer_price_updates WHERE owner_id=? AND stock_id=?').bind(u.id,sid)
     ]);
     return response({ok:true});
   }
   const match=path.match(/^\/api\/stocks\/([^/]+)\/(price|note|quote)$/);
   if(match){const sid=match[1],action=match[2];if(!await e.DB.prepare('SELECT id FROM stocks WHERE id=?').bind(sid).first())return response({error:'종목이 없습니다'},404);
     if(action==='price'&&method==='POST'){const b=await body(r);const marketStock=await e.DB.prepare('SELECT market FROM stocks WHERE id=?').bind(sid).first<{market:string}>();if(b.mode==='API'&&marketStock!.market!=='US')return response({error:'한국장·일본장은 현재가를 직접 입력하세요'},400);if(!['MANUAL','API'].includes(b.mode))throw new Error('가격 모드를 확인하세요');const prev=await e.DB.prepare('SELECT manual_price FROM user_price_overrides WHERE user_id=? AND stock_id=?').bind(u.id,sid).first<{manual_price:string|null}>(),price=b.price===undefined?prev?.manual_price??null:number(b.price,true);if(b.mode==='MANUAL'&&price===null)throw new Error('수동 현재가를 입력하세요');
-      await e.DB.prepare('INSERT INTO user_price_overrides VALUES (?,?,?,?,?,?) ON CONFLICT(user_id,stock_id) DO UPDATE SET manual_price=excluded.manual_price,price_mode=excluded.price_mode,updated_at=CASE WHEN ? THEN excluded.updated_at ELSE user_price_overrides.updated_at END').bind(id(),u.id,sid,price,b.mode,now(),b.price===undefined?0:1).run();return response({ok:true});}
+      await mutate(e.DB,u,[e.DB.prepare('INSERT INTO user_price_overrides VALUES (?,?,?,?,?,?) ON CONFLICT(user_id,stock_id) DO UPDATE SET manual_price=excluded.manual_price,price_mode=excluded.price_mode,updated_at=CASE WHEN ? THEN excluded.updated_at ELSE user_price_overrides.updated_at END').bind(id(),u.id,sid,price,b.mode,now(),b.price===undefined?0:1),e.DB.prepare('DELETE FROM peer_price_updates WHERE owner_id=? AND stock_id=?').bind(u.id,sid)]);return response({ok:true});}
     if(action==='note'){if(method==='GET')return response(await e.DB.prepare('SELECT * FROM investment_notes WHERE user_id=? AND stock_id=?').bind(u.id,sid).first()||{content:'',target_price:null,stop_price:null,visibility:'PRIVATE'});if(method==='POST'){const b=await body(r),previous=await e.DB.prepare('SELECT visibility FROM investment_notes WHERE user_id=? AND stock_id=?').bind(u.id,sid).first<{visibility:string}>();await e.DB.prepare('INSERT INTO investment_notes(user_id,stock_id,content,target_price,stop_price,updated_at,visibility) VALUES (?,?,?,?,?,?,?) ON CONFLICT(user_id,stock_id) DO UPDATE SET content=excluded.content,target_price=excluded.target_price,stop_price=excluded.stop_price,updated_at=excluded.updated_at,visibility=excluded.visibility').bind(u.id,sid,text(b.content,15000),b.target_price?number(b.target_price,true):null,b.stop_price?number(b.stop_price,true):null,now(),visibility(b.visibility,previous?.visibility)).run();return response({ok:true})}}
     if(action==='quote'&&method==='POST'){
       const marketStock=await e.DB.prepare('SELECT market FROM stocks WHERE id=?').bind(sid).first<{market:string}>();if(marketStock!.market!=='US')return response({error:'한국장·일본장은 현재가를 직접 입력하세요'},400);
