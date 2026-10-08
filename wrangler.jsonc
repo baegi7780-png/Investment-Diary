@@ -1,5 +1,5 @@
 {
-  "name": "stock-journal",
+  "name": "investment-diary",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-08",
   "assets": {
@@ -17,5 +17,7 @@
   ],
   "vars": {
     "ALLOW_HTTP_LOCAL": "true"
-  }
+  },
+  "workers_dev": true,
+  "preview_urls": false
 }
