@@ -57,6 +57,8 @@ http://localhost:8787 에서 설정 토큰, 관리자 아이디, 12자 이상 �
 
 ## Cloudflare D1 및 배포
 
+배포 전 `npm run vendor`로 QR 브라우저 번들과 앱 아이콘을 생성합니다. 정적 파일은 저장소에도 포함되어 있습니다.
+
 아직 실제 Cloudflare 계정 연결이나 원격 배포는 실행하지 않았습니다. 본인 계정으로 다음을 진행하세요.
 
 ```powershell
@@ -139,7 +141,23 @@ SQL 백업은 먼저 새 별도 D1에 복구하고 데이터를 검증한 후 bi
 
 향후 개선: 거래 페이지네이션과 조회 범위 최적화, API 전역 호출 제한 및 동시 요청 결합, MFA/비밀번호 복구, 변경 감사 이력과 소프트 삭제, 자동 백업·복구 훈련, 자동 시세 갱신, 데이터 import, 엄밀한 유리수 원가 계산. 현재는 수동 백업 절차를 제공합니다.
 
-## Git
+## QR 접속과 앱처럼 사용하기
+
+상단 **QR · 앱처럼 사용** 버튼에서 접속 QR, PNG 저장, 주소 복사와 설치 안내를 제공합니다. Cloudflare에 HTTPS 배포하면 현재 사이트의 로그인 시작 주소로 QR이 자동 생성됩니다. localhost에서는 휴대폰 접속용 QR을 만들지 않고 배포 필요 안내를 표시합니다. QR에는 로그인 정보·쿼리·투자기록 경로를 넣지 않습니다.
+
+- Android Chrome: 앱 설치 버튼이 표시되면 누르거나 브라우저 메뉴의 앱 설치/홈 화면에 추가를 사용합니다.
+- iPhone/iPad: Safari에서 공유 → 홈 화면에 추가를 선택합니다.
+- PC Chrome/Edge: 주소창 설치 아이콘 또는 브라우저 메뉴에서 설치합니다.
+
+설치 후 아이콘으로 열면 standalone 앱 창으로 실행됩니다. 설치 버튼 표시 여부는 브라우저에 따라 달라집니다. HTTPS와 manifest 및 192/512px 아이콘을 제공합니다. 외부 앱스토어 등록은 필요하지 않습니다. 구현은 [MDN PWA 설치 안내](https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/Guides/Making_PWAs_installable)를 기준으로 했습니다.
+
+오프라인에는 연결 안내 화면을 표시합니다. Service Worker는 정적 UI 파일만 캐시하며 `/api/*`, 로그인 응답, 투자정보와 쓰기 요청을 캐시하거나 오프라인 저장하지 않습니다. 조회/거래 저장에는 연결이 필요합니다. 새 앱 버전을 배포할 때 sw.js의 CACHE 버전도 갱신하세요.
+
+### 추가 파일
+
+`public/manifest.webmanifest`, `public/pwa.js`, `public/access-url.mjs`, `public/sw.js`, `public/offline.html`, `public/icons/`, `public/vendor/qrcode.mjs`, `scripts/icons.mjs`, `tests/pwa.test.ts`.
+
+## Git 저장소 사용
 
 로컬 Git 저장소를 초기화했습니다. 원격 저장소는 만들지 않았습니다. 코드/마이그레이션/테스트만 관리하며 DB, Secret, 설치 파일은 제외합니다. GitHub에 올릴 경우 비공개 저장소를 권장합니다. 최초 커밋은 본인 Git 이름과 이메일을 설정한 후 만들면 됩니다.
 

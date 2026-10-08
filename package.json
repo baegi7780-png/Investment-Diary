@@ -1,1 +1,30 @@
-{"name":"stock-journal","private":true,"version":"1.0.0","type":"module","scripts":{"vendor":"node scripts/vendor.mjs","dev":"wrangler dev","deploy":"wrangler deploy","db:local":"wrangler d1 migrations apply DB --local","db:remote":"wrangler d1 migrations apply DB --remote","check":"tsc --noEmit","test":"tsx --test tests/*.test.ts","test:integration":"node tests/integration.mjs"},"dependencies":{"bootstrap":"^5.3.8","decimal.js":"^10.6.0","qrcode":"1.5.4"},"devDependencies":{"@cloudflare/workers-types":"^5.20261008.1","tsx":"^4.20.0","typescript":"^5.9.0","wrangler":"^4.0.0"}}
+{
+  "name": "stock-journal",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "vendor": "node scripts/vendor.mjs",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:local": "wrangler d1 migrations apply DB --local",
+    "db:remote": "wrangler d1 migrations apply DB --remote",
+    "check": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.ts",
+    "test:integration": "node tests/integration.mjs",
+    "predev": "node scripts/vendor.mjs",
+    "predeploy": "node scripts/vendor.mjs && tsc --noEmit"
+  },
+  "dependencies": {
+    "bootstrap": "^5.3.8",
+    "decimal.js": "^10.6.0",
+    "qrcode": "1.5.4"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261008.1",
+    "esbuild": "0.28.1",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0",
+    "wrangler": "^4.0.0"
+  }
+}
