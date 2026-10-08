@@ -1,0 +1,10 @@
+import {mkdir,copyFile} from 'node:fs/promises';
+import {build} from 'esbuild';
+await mkdir('public/vendor',{recursive:true});
+await copyFile('node_modules/bootstrap/dist/css/bootstrap.min.css','public/vendor/bootstrap.min.css');
+await copyFile('node_modules/decimal.js/decimal.mjs','public/vendor/decimal.mjs');
+await copyFile('node_modules/bootstrap/LICENSE','public/vendor/bootstrap.LICENSE');
+await copyFile('node_modules/decimal.js/LICENCE.md','public/vendor/decimal.LICENCE.md');
+await copyFile('node_modules/qrcode/license','public/vendor/qrcode.LICENSE');
+await build({stdin:{contents:"export {toCanvas} from 'qrcode';",resolveDir:process.cwd()},outfile:'public/vendor/qrcode.mjs',bundle:true,minify:true,platform:'browser',format:'esm'});
+await import('./icons.mjs');

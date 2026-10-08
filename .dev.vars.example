@@ -1,0 +1,4 @@
+SETUP_TOKEN=replace-with-a-long-random-one-time-token
+# Optional: enabled only after your provider confirms display rights for all users.
+# TWELVE_DATA_API_KEY=
+# QUOTE_DISPLAY_APPROVED=true

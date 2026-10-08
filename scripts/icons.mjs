@@ -1,0 +1,6 @@
+import {deflateSync} from 'node:zlib';
+import {mkdir,writeFile} from 'node:fs/promises';
+function crc32(bytes){let c=0xffffffff;for(const b of bytes){c^=b;for(let j=0;j<8;j++)c=(c>>>1)^((c&1)?0xedb88320:0)}return (c^0xffffffff)>>>0}
+function chunk(type,data){const t=Buffer.from(type),length=Buffer.alloc(4),crc=Buffer.alloc(4);length.writeUInt32BE(data.length);crc.writeUInt32BE(crc32(Buffer.concat([t,data])));return Buffer.concat([length,t,data,crc])}
+function png(size){const pixels=Buffer.alloc(size*(size*4+1));for(let y=0;y<size;y++){const row=y*(size*4+1);for(let x=0;x<size;x++){const offset=row+1+x*4,u=(x+.5)/size,v=(y+.5)/size,d=Math.abs(u-.5)+Math.abs(v-.5),diamond=d<.29&&d>.245,inner=d<.20&&d>.155,bar=u>.39&&u<.44&&v>.48&&v<.63||u>.48&&u<.53&&v>.41&&v<.63||u>.57&&u<.62&&v>.34&&v<.63;const col=diamond||inner?[230,238,255]:bar?[124,156,255]:[11,18,32];pixels.set([...col,255],offset)}}const header=Buffer.alloc(13);header.writeUInt32BE(size,0);header.writeUInt32BE(size,4);header[8]=8;header[9]=6;return Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),chunk('IHDR',header),chunk('IDAT',deflateSync(pixels)),chunk('IEND',Buffer.alloc(0))])}
+await mkdir('public/icons',{recursive:true});for(const [name,size] of [['icon-192',192],['icon-512',512],['icon-maskable-512',512]])await writeFile(`public/icons/${name}.png`,png(size));

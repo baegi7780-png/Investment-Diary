@@ -1,0 +1,15 @@
+PRAGMA foreign_keys = ON;
+CREATE TABLE users (id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE COLLATE NOCASE, password_hash TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('ADMIN','USER')), active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)), revision INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
+CREATE TRIGGER user_limit BEFORE INSERT ON users WHEN (SELECT COUNT(*) FROM users)>=5 BEGIN SELECT RAISE(ABORT,'계정은 최대 5개입니다'); END;
+CREATE TABLE sessions (token_hash TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,csrf TEXT NOT NULL,expires_at TEXT NOT NULL);
+CREATE INDEX session_user ON sessions(user_id);
+CREATE TABLE stocks (id TEXT PRIMARY KEY,ticker TEXT NOT NULL UNIQUE,name TEXT NOT NULL,exchange TEXT NOT NULL,currency TEXT NOT NULL DEFAULT 'USD' CHECK(currency='USD'));
+CREATE TABLE transactions (transaction_id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),stock_id TEXT NOT NULL REFERENCES stocks(id),type TEXT NOT NULL CHECK(type IN ('BUY','SELL')),price TEXT NOT NULL,quantity TEXT NOT NULL,fee TEXT NOT NULL,trade_date TEXT NOT NULL,reason TEXT NOT NULL,memo TEXT NOT NULL,request_id TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,UNIQUE(user_id,request_id));
+CREATE INDEX transaction_position ON transactions(user_id,stock_id,trade_date,created_at,transaction_id);
+CREATE TABLE investment_notes (user_id TEXT NOT NULL REFERENCES users(id),stock_id TEXT NOT NULL REFERENCES stocks(id),content TEXT NOT NULL DEFAULT '',target_price TEXT,stop_price TEXT,updated_at TEXT NOT NULL,PRIMARY KEY(user_id,stock_id));
+CREATE TABLE stock_price_cache (stock_id TEXT PRIMARY KEY REFERENCES stocks(id),price TEXT NOT NULL,provided_at TEXT NOT NULL,updated_at TEXT NOT NULL,source TEXT NOT NULL,delay_note TEXT NOT NULL);
+CREATE TABLE user_price_overrides (id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),stock_id TEXT NOT NULL REFERENCES stocks(id),manual_price TEXT,price_mode TEXT NOT NULL CHECK(price_mode IN ('MANUAL','API')),updated_at TEXT NOT NULL,UNIQUE(user_id,stock_id));
+CREATE TABLE login_attempts (key TEXT PRIMARY KEY,count INTEGER NOT NULL,reset_at INTEGER NOT NULL);
+CREATE TABLE write_guards (user_id TEXT PRIMARY KEY REFERENCES users(id),expected_revision INTEGER NOT NULL);
+CREATE TRIGGER revision_guard BEFORE INSERT ON write_guards WHEN (SELECT revision FROM users WHERE id=NEW.user_id)!=NEW.expected_revision BEGIN SELECT RAISE(ABORT,'CONCURRENT_WRITE'); END;
+CREATE TRIGGER revision_increment AFTER INSERT ON write_guards BEGIN UPDATE users SET revision=revision+1 WHERE id=NEW.user_id; END;

@@ -1,0 +1,8 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+// @ts-ignore JavaScript helper shared with the browser
+import {publicAccessUrl} from '../public/access-url.mjs';
+test('QR 주소는 HTTPS 로그인 루트만 공유하고 토큰/경로는 제외',()=>{assert.equal(publicAccessUrl('https://journal.example.com/private?token=secret#memo'),'https://journal.example.com/');assert.equal(publicAccessUrl('https://user:password@journal.example.com/'),'https://journal.example.com/');for(const url of ['http://localhost:8787/','https://localhost/','https://127.0.0.1/','https://[::1]/','http://journal.example.com/'])assert.equal(publicAccessUrl(url),null)});
+test('PWA manifest와 PNG 아이콘 규격',()=>{const manifest=JSON.parse(readFileSync('public/manifest.webmanifest','utf8'));assert.equal(manifest.display,'standalone');assert.equal(manifest.start_url,'/');for(const icon of manifest.icons){const file=readFileSync('public'+icon.src);assert.equal(file.subarray(1,4).toString(),'PNG');const size=Number(icon.sizes.split('x')[0]);assert.equal(file.readUInt32BE(16),size);assert.equal(file.readUInt32BE(20),size)}});
+test('서비스워커는 민감한 API/쓰기 요청을 가로채거나 캐싱하지 않는다',async()=>{const {runInNewContext}=await import('node:vm');const listeners:Record<string,Function>={};const sandbox={self:{location:{origin:'https://journal.example.com'},addEventListener:(name:string,handler:Function)=>listeners[name]=handler},URL,Response};runInNewContext(readFileSync('public/sw.js','utf8'),sandbox);for(const [url,method] of [['/api/portfolio','GET'],['/api/login','POST'],['/','POST']]){let intercepted=false;listeners.fetch({request:{url:'https://journal.example.com'+url,method,mode:'navigate'},respondWith:()=>intercepted=true});assert.equal(intercepted,false)}});
