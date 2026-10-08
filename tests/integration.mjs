@@ -9,13 +9,19 @@ class Client{
   async login(username,password){await this.ok('/login','POST',{username,password});this.csrf=(await this.ok('/me')).csrf}
 }
 const a=new Client(),b=new Client(),guest=new Client();
+assert.equal((await guest.call('/register','POST',{username:'early_user',password:'User-test-pass-123'})).status,403);
 await a.ok('/setup','POST',{token:setup,username:'test_admin',password:'Admin-test-pass-123'});
 await a.login('test_admin','Admin-test-pass-123');
 assert.equal((await a.ok('/me')).needsNickname,true);assert.equal((await a.call('/community/portfolios')).status,409);
 assert.equal((await guest.call('/profile','POST',{nickname:'외부사용자'})).status,401);
 for(const nickname of ['','가','<script>alert(1)</script>'])assert.equal((await a.call('/profile','POST',{nickname})).status,400);
 await a.ok('/profile','POST',{nickname:'투자대장'});assert.equal((await a.ok('/me')).needsNickname,false);
-await a.ok('/users','POST',{username:'test_user',password:'User-test-pass-123'});
+assert.equal((await guest.ok('/status')).accountLimit,5);
+for(const entry of [{username:'a',password:'User-test-pass-123'},{username:'bad user',password:'User-test-pass-123'},{username:'valid_user',password:'short'}])assert.equal((await guest.call('/register','POST',entry)).status,400);
+const wrongOrigin=await fetch(origin+'/api/register',{method:'POST',headers:{'Content-Type':'application/json',Origin:'https://wrong.example'},body:JSON.stringify({username:'csrf_user',password:'User-test-pass-123'})});assert.equal(wrongOrigin.status,403);
+await guest.ok('/register','POST',{username:'test_user',password:'User-test-pass-123',role:'ADMIN'});
+assert.equal((await guest.call('/register','POST',{username:'TEST_USER',password:'User-test-pass-123'})).status,400);
+assert.equal((await guest.call('/registration-settings')).status,401);
 const stock=await a.ok('/stocks','POST',{ticker:'NVDA',name:'NVIDIA',exchange:'NASDAQ'});
 const buy1={stock_id:stock.id,type:'BUY',price:'180',quantity:'5',fee:'0',trade_date:'2026-10-01',reason:'AI 데이터센터 성장',memo:'',request_id:crypto.randomUUID()};
 await a.ok('/transactions','POST',buy1);await a.ok('/transactions','POST',buy1);
@@ -31,7 +37,7 @@ for(const hidden of ['user_id','transaction_id','reason','memo','profits','passw
 assert.equal((await a.call('/community/portfolios','POST',{})).status,405);assert.equal((await a.call('/public/portfolio')).status,404);
 await a.ok('/logout','POST',{});await a.login('test_admin','Admin-test-pass-123');assert.equal((await a.ok('/portfolio')).items[0].manual_price,'200');
 assert.equal((await a.ok('/me')).nickname,'투자대장');assert.equal((await a.ok('/community/portfolios')).users.find(u=>u.username==='test_admin').nickname,'투자대장');
-await b.login('test_user','User-test-pass-123');assert.equal((await b.ok('/me')).needsNickname,true);assert.equal((await b.call('/profile','POST',{nickname:'투자대장'})).status,400);await b.ok('/profile','POST',{nickname:'해외주식러'});assert.equal((await b.ok('/transactions')).length,0);assert.equal((await b.ok('/portfolio')).items.length,0);
+await b.login('test_user','User-test-pass-123');assert.equal((await b.ok('/me')).role,'USER');assert.equal((await b.ok('/me')).needsNickname,true);assert.equal((await b.call('/profile','POST',{nickname:'투자대장'})).status,400);await b.ok('/profile','POST',{nickname:'해외주식러'});assert.equal((await b.ok('/transactions')).length,0);assert.equal((await b.ok('/portfolio')).items.length,0);
 await a.ok('/profile','POST',{nickname:'장기투자자',user_id:(await b.ok('/me')).id});assert.equal((await b.ok('/me')).nickname,'해외주식러');assert.equal((await a.ok('/me')).nickname,'장기투자자');
 const ta=await a.ok('/transactions');assert.equal((await b.call('/transactions','DELETE',{transaction_id:ta[0].transaction_id})).status,404);
 assert.equal((await b.call('/users')).status,403);assert.equal((await guest.call('/portfolio')).status,401);
@@ -49,8 +55,20 @@ await a.ok(`/stocks/${stock.id}/price`,'POST',{mode:'API'});assert.equal((await 
 execFileSync(process.execPath,['node_modules/wrangler/bin/wrangler.js','d1','execute','DB','--local','--persist-to',process.env.TEST_STATE||'../../work/test-state','--command',"INSERT INTO stock_price_cache SELECT id,'195','2026-10-08T00:00:00.000Z','2026-10-08T00:00:00.000Z','TEST ONLY','테스트 환경 전용 가격' FROM stocks WHERE ticker='NVDA';"],{stdio:'pipe'});
 assert.equal((await a.ok('/portfolio')).items[0].position.pnl,'70');
 await a.ok(`/stocks/${stock.id}/price`,'POST',{mode:'MANUAL'});assert.equal((await a.ok('/portfolio')).items[0].position.pnl,'105');
-for(let i=0;i<3;i++)await a.ok('/users','POST',{username:'extra_user_'+i,password:'Extra-user-pass-123'});assert.equal((await a.call('/users','POST',{username:'sixth_user',password:'Sixth-user-pass-123'})).status,400);
+const concurrent=await Promise.all(Array.from({length:4},(_,i)=>guest.call('/register','POST',{username:'extra_user_'+i,password:'Extra-user-pass-123'})));
+assert.equal(concurrent.filter(r=>r.status===200).length,3);assert.equal(concurrent.filter(r=>r.status===400).length,1);
+assert.equal((await a.ok('/users')).length,5);assert.equal((await guest.ok('/status')).registrationOpen,false);
+assert.equal((await guest.call('/register','POST',{username:'sixth_user',password:'Sixth-user-pass-123'})).status,400);
+assert.equal((await a.call('/users','POST',{username:'admin_extra',password:'Extra-user-pass-123'})).status,400);
+assert.equal((await b.call('/registration-settings','POST',{accountLimit:0})).status,403);
+for(const accountLimit of [-1,1.5,'0',100001])assert.equal((await a.call('/registration-settings','POST',{accountLimit})).status,400);
+await a.ok('/registration-settings','POST',{accountLimit:0});assert.equal((await guest.ok('/status')).registrationOpen,true);
+await guest.ok('/register','POST',{username:'sixth_user',password:'Sixth-user-pass-123'});
+await a.ok('/registration-settings','POST',{accountLimit:5});assert.equal((await a.ok('/users')).length,6);assert.equal((await guest.ok('/status')).registrationOpen,false);
 const users=await a.ok('/users'),uid=users.find(u=>u.username==='test_user').id;await a.ok('/users','PATCH',{id:uid,active:false});assert.equal((await b.call('/portfolio')).status,401);
 assert.equal((await b.call('/community/portfolios')).status,401);assert.ok(!(await a.ok('/community/portfolios')).users.some(u=>u.username==='test_user'));
 await a.ok('/password','POST',{current:'Admin-test-pass-123',password:'Changed-admin-pass-123'});assert.equal((await a.call('/portfolio')).status,401);await a.login('test_admin','Changed-admin-pass-123');
 console.log('PASS: authenticated member overviews, anonymous access blocked, read-only cross-account sharing, private trades/notes isolated, NVDA scenario and existing auth/trading tests');
+
+for(let i=0;i<21;i++)var rate=await guest.call('/register','POST',{username:'invalid',password:'short'});assert.equal(rate.status,429);
+console.log('PASS: self registration, USER-only role, duplicate validation, concurrent account limit, admin-only limit changes and rate limiting');

@@ -25,7 +25,25 @@ async function route(r:Request,e:Env):Promise<Response>{
   if(method!=='GET'&&r.headers.get('Origin')!==url.origin)return response({error:'요청 출처를 확인할 수 없습니다'},403);
   const local=['localhost','127.0.0.1','[::1]'].includes(url.hostname);
   if(!secure&&!(local&&e.ALLOW_HTTP_LOCAL==='true'))return response({error:'HTTPS가 필요합니다'},403);
-  if(path==='/api/status')return response({setupRequired:!(await e.DB.prepare('SELECT id FROM users LIMIT 1').first())});
+  if(path==='/api/status'){
+    const count=await e.DB.prepare('SELECT COUNT(*) AS count FROM users').first<{count:number}>();
+    const setting=await e.DB.prepare("SELECT value FROM app_settings WHERE key='account_limit'").first<{value:number}>();
+    const limit=setting!.value;
+    return response({setupRequired:!count!.count,accountLimit:limit,registrationOpen:count!.count>0&&(!limit||count!.count<limit)});
+  }
+  if(path==='/api/register'){
+    if(method!=='POST')return response({error:'지원하지 않는 요청'},405);
+    if(!(await e.DB.prepare("SELECT id FROM users WHERE role='ADMIN' LIMIT 1").first()))return response({error:'관리자 초기 설정이 필요합니다'},403);
+    const time=Date.now(),key='register:'+await digest(r.headers.get('CF-Connecting-IP')||'local');
+    await e.DB.prepare('INSERT INTO login_attempts VALUES (?,1,?) ON CONFLICT(key) DO UPDATE SET count=CASE WHEN reset_at<? THEN 1 ELSE count+1 END,reset_at=CASE WHEN reset_at<? THEN excluded.reset_at ELSE reset_at END').bind(key,time+900000,time,time).run();
+    const attempt=await e.DB.prepare('SELECT count FROM login_attempts WHERE key=?').bind(key).first<{count:number}>();
+    if(attempt!.count>20)return response({error:'가입 요청이 많습니다. 15분 후 다시 시도하세요'},429);
+    const b=await body(r),username=text(b.username,40);
+    if(!/^[a-zA-Z0-9_.-]{3,40}$/.test(username))throw new Error('아이디는 영문·숫자·._- 3~40자입니다');
+    const h=await hash(password(b.password));
+    await e.DB.prepare("INSERT INTO users(id,username,password_hash,role,created_at) VALUES (?,?,?,'USER',?)").bind(id(),username,h,now()).run();
+    return response({ok:true});
+  }
   if(path==='/api/setup'&&method==='POST'){
     const b=await body(r);if(!e.SETUP_TOKEN||!equal(String(b.token||''),e.SETUP_TOKEN))return response({error:'초기 설정 토큰이 올바르지 않습니다'},403);
     const username=text(b.username,40);if(!/^[a-zA-Z0-9_.-]{3,40}$/.test(username))throw new Error('아이디는 영문/숫자 3~40자입니다');
@@ -53,6 +71,16 @@ async function route(r:Request,e:Env):Promise<Response>{
     await e.DB.prepare('UPDATE users SET nickname=?,nickname_key=? WHERE id=?').bind(nickname,nickname.toLocaleLowerCase('en-US'),u.id).run();return response({ok:true,nickname});
   }
   if(!u.nickname&&!['/api/me','/api/logout'].includes(path))return response({error:'닉네임을 먼저 설정해주세요'},409);
+  if(path==='/api/registration-settings'){
+    if(u.role!=='ADMIN')return response({error:'관리자 권한이 필요합니다'},403);
+    if(method==='POST'){
+      const b=await body(r),limit=b.accountLimit;
+      if(typeof limit!=='number'||!Number.isSafeInteger(limit)||limit<0||limit>100000)throw new Error('인원 제한은 0~100000 사이의 정수입니다. 0은 제한 없음입니다');
+      await e.DB.prepare("UPDATE app_settings SET value=? WHERE key='account_limit'").bind(limit).run();
+    }else if(method!=='GET')return response({error:'지원하지 않는 요청'},405);
+    const setting=await e.DB.prepare("SELECT value FROM app_settings WHERE key='account_limit'").first<{value:number}>();
+    return response({accountLimit:setting!.value});
+  }
   if(path==='/api/community/portfolios')return method==='GET'?response(await communityPortfolios(e.DB)):response({error:'전체 투자현황은 조회만 가능합니다'},405);
   if(path==='/api/me')return response({id:u.id,username:u.username,nickname:u.nickname,needsNickname:!u.nickname,role:u.role,csrf:u.csrf});
   if(path==='/api/logout'&&method==='POST'){await e.DB.prepare('DELETE FROM sessions WHERE token_hash=?').bind(tokenHash).run();return response({ok:true},200,{'Set-Cookie':cookie('',secure,0)})}
@@ -112,5 +140,5 @@ async function route(r:Request,e:Env):Promise<Response>{
   }
   return response({error:'요청 경로가 없습니다'},404);
 }
-export default {async fetch(r:Request,e:Env){let res:Response;try{res=await route(r,e)}catch(err){const message=err instanceof Error?err.message:'';res=response({error:message.includes('CONCURRENT_WRITE')?'다른 요청이 먼저 저장되었습니다. 새로고침 후 다시 시도하세요':message.includes('계정은 최대')?'계정은 최대 5개입니다':message.includes('UNIQUE')?'이미 등록된 정보입니다':message.includes('D1')?'데이터 저장 오류가 발생했습니다':message||'처리 중 오류가 발생했습니다'},400)}
+export default {async fetch(r:Request,e:Env){let res:Response;try{res=await route(r,e)}catch(err){const message=err instanceof Error?err.message:'';res=response({error:message.includes('CONCURRENT_WRITE')?'다른 요청이 먼저 저장되었습니다. 새로고침 후 다시 시도하세요':message.includes('계정은 최대')?'가입 인원이 가득 찼습니다. 관리자에게 문의해 주세요':message.includes('UNIQUE')?'이미 등록된 정보입니다':message.includes('D1')?'데이터 저장 오류가 발생했습니다':message||'처리 중 오류가 발생했습니다'},400)}
   const headers=new Headers(res.headers);headers.set('X-Content-Type-Options','nosniff');headers.set('Referrer-Policy','same-origin');headers.set('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");if(['/sw.js','/manifest.webmanifest'].includes(new URL(r.url).pathname))headers.set('Cache-Control','no-cache');if(new URL(r.url).protocol==='https:')headers.set('Strict-Transport-Security','max-age=31536000');return new Response(res.body,{status:res.status,headers});}};
