@@ -87,20 +87,7 @@ async function route(r:Request,e:Env):Promise<Response>{
     return response({accountLimit:setting!.value});
   }
   if(path==='/api/community/portfolios')return method==='GET'?response(await communityPortfolios(e.DB,marketFilter(url.searchParams.get('market')))):response({error:'전체 투자현황은 조회만 가능합니다'},405);
-  if(path==='/api/community/price'){
-    if(method!=='POST')return response({error:'현재가 저장은 POST 요청을 사용하세요'},405);
-    const b=await body(r),sid=text(b.stock_id),owner=await e.DB.prepare('SELECT id,revision FROM users WHERE username=? AND active=1').bind(text(b.username,40)).first<{id:string;revision:number}>();
-    const stock=await e.DB.prepare('SELECT currency FROM stocks WHERE id=?').bind(sid).first<{currency:string}>();
-    if(!owner||!stock)return response({error:'회원 또는 종목을 찾을 수 없습니다'},404);
-    if(b.currency!==stock.currency)throw new Error('종목의 거래 통화와 입력 통화가 일치하지 않습니다');
-    if(new Decimal(position(await trades(e.DB,owner.id,sid)).quantity).lte(0))return response({error:'현재 보유 중인 종목만 현재가를 수정할 수 있습니다'},404);
-    const price=number(b.price,true),updated=now();
-    await mutate(e.DB,owner,[
-      e.DB.prepare("INSERT INTO user_price_overrides(id,user_id,stock_id,manual_price,price_mode,updated_at) VALUES (?,?,?,?,'MANUAL',?) ON CONFLICT(user_id,stock_id) DO UPDATE SET manual_price=excluded.manual_price,price_mode='MANUAL',updated_at=excluded.updated_at").bind(id(),owner.id,sid,price,updated),
-      e.DB.prepare('INSERT INTO peer_price_updates(owner_id,stock_id,editor_id,price,updated_at) VALUES (?,?,?,?,?) ON CONFLICT(owner_id,stock_id) DO UPDATE SET editor_id=excluded.editor_id,price=excluded.price,updated_at=excluded.updated_at').bind(owner.id,sid,u.id,price,updated)
-    ]);
-    return response({ok:true});
-  }
+  if(path==='/api/community/price')return response({error:'다른 회원의 현재가는 저장하지 않습니다. 화면의 예상 수익률을 이용하세요'},405);
   if(path==='/api/community/records'){
     if(method!=='GET')return response({error:'공개 기록은 조회만 가능합니다'},405);
     const records=await sharedRecords(e.DB,text(url.searchParams.get('username'),40),marketFilter(url.searchParams.get('market')));
