@@ -7,6 +7,8 @@
     "vendor": "node scripts/vendor.mjs",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
+    "build:pages": "node scripts/build-pages.mjs",
+    "deploy:pages": "node scripts/build-pages.mjs && cd pages && wrangler pages deploy ../dist-pages --project-name investment-diary --branch main",
     "db:local": "wrangler d1 migrations apply DB --local",
     "db:remote": "wrangler d1 migrations apply DB --remote",
     "check": "tsc --noEmit",

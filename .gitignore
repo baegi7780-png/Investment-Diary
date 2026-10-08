@@ -1,4 +1,5 @@
 node_modules/
+dist-pages/
 .pnpm-store/
 .wrangler/
 .dev.vars
