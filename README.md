@@ -57,6 +57,8 @@ http://localhost:8787 에서 설정 토큰, 관리자 아이디, 12자 이상 �
 
 ## Cloudflare D1 및 배포
 
+Cloudflare Git 빌드용 패키지 관리자는 `pnpm@10.11.1`로 지정했습니다. `pnpm-workspace.yaml`에 루트 패키지(`packages: ['.']`)와 esbuild/workerd의 설치 스크립트 허용을 설정했습니다. 빌드 설정은 루트 디렉터리 `/`, 빌드 명령 `pnpm run vendor`, 배포 명령 `pnpm run deploy`를 사용하세요. `packages field missing or empty` 오류가 발생했던 빌드는 수정 커밋으로 재시도합니다. 원격 D1 ID와 Secret 설정은 별도로 필요합니다.
+
 배포 전 `npm run vendor`로 QR 브라우저 번들과 앱 아이콘을 생성합니다. 정적 파일은 저장소에도 포함되어 있습니다.
 
 아직 실제 Cloudflare 계정 연결이나 원격 배포는 실행하지 않았습니다. 본인 계정으로 다음을 진행하세요.

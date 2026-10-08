@@ -1,5 +1,7 @@
 # 검증 결과 · 2026-10-08
 
+Cloudflare 빌드 설치 오류 수정: `pnpm-workspace.yaml` 루트 packages 선언 및 pnpm 10 설치 스크립트 허용 설정 적용. pnpm 10.11.1의 `install --frozen-lockfile`로 별도 새 작업 폴더에 설치 성공(esbuild/workerd 설치 스크립트 실행 확인). 이 설치 결과로 정적 파일 생성, TypeScript 검사 및 테스트 10개도 통과했습니다. 실제 Cloudflare 원격 재빌드 결과는 아직 확인하지 않았습니다.
+
 Cloudflare 계정 연결 없이 로컬 workerd/Workers + D1에서 실행했습니다. 사용자용 기본 DB와 테스트 DB는 분리되어 있습니다.
 
 - TypeScript strict 검사: 통과
