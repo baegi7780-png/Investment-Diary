@@ -1,5 +1,7 @@
 # 검증 결과 · 2026-10-08
 
+공개 메인 추가 검증: 새 전용 로컬 D1에서 비로그인 공개 조회(7주, $185 평단, $200 현재가, $105 평가수익)를 확인했습니다. 공개 JSON에 user_id/transaction_id/reason/memo/profits/password_hash/csrf/request_id/관리자 아이디가 포함되지 않으며, POST 요청은 405입니다. 다른 사용자 ID를 URL에 넣어도 관리자 공개 현황만 반환합니다. 기존 비로그인 개인 API 401, 사용자별 가격·메모·거래 분리, 모든 거래/인증 통합 테스트와 단위 테스트 10개 및 배포 번들 검사가 통과했습니다. 브라우저에서 비로그인 공개 메인이 표시되고 수정 버튼이 없는 것을 확인했습니다.
+
 Cloudflare 빌드 설치 오류 수정: `pnpm-workspace.yaml` 루트 packages 선언 및 pnpm 10 설치 스크립트 허용 설정 적용. pnpm 10.11.1의 `install --frozen-lockfile`로 별도 새 작업 폴더에 설치 성공(esbuild/workerd 설치 스크립트 실행 확인). 이 설치 결과로 정적 파일 생성, TypeScript 검사 및 테스트 10개도 통과했습니다. 실제 Cloudflare 원격 재빌드 결과는 아직 확인하지 않았습니다.
 
 Cloudflare 계정 연결 없이 로컬 workerd/Workers + D1에서 실행했습니다. 사용자용 기본 DB와 테스트 DB는 분리되어 있습니다.

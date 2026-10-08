@@ -1,4 +1,5 @@
 import {number,position,Decimal,type Trade} from './calculation';
+import {publicPortfolio} from './public-portfolio';
 interface Env {DB:D1Database;ASSETS:Fetcher;SETUP_TOKEN?:string;ALLOW_HTTP_LOCAL?:string;TWELVE_DATA_API_KEY?:string;QUOTE_DISPLAY_APPROVED?:string}
 type User={id:string;username:string;role:string;active:number;revision:number;password_hash:string};
 const now=()=>new Date().toISOString(),id=()=>crypto.randomUUID();
@@ -24,6 +25,7 @@ async function route(r:Request,e:Env):Promise<Response>{
   if(method!=='GET'&&r.headers.get('Origin')!==url.origin)return response({error:'요청 출처를 확인할 수 없습니다'},403);
   const local=['localhost','127.0.0.1','[::1]'].includes(url.hostname);
   if(!secure&&!(local&&e.ALLOW_HTTP_LOCAL==='true'))return response({error:'HTTPS가 필요합니다'},403);
+  if(path==='/api/public/portfolio')return method==='GET'?response(await publicPortfolio(e.DB)):response({error:'공개 현황은 조회만 가능합니다'},405);
   if(path==='/api/status')return response({setupRequired:!(await e.DB.prepare('SELECT id FROM users LIMIT 1').first())});
   if(path==='/api/setup'&&method==='POST'){
     const b=await body(r);if(!e.SETUP_TOKEN||!equal(String(b.token||''),e.SETUP_TOKEN))return response({error:'초기 설정 토큰이 올바르지 않습니다'},403);
