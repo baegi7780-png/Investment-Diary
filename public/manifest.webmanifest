@@ -2,7 +2,7 @@
   "id": "/",
   "name": "투자노트 · Stock Journal",
   "short_name": "투자노트",
-  "description": "나만의 주식 매매 기록, 투자 이유와 포트폴리오",
+  "description": "한국·미국·일본 주식 매매 기록, 투자 이유와 포트폴리오",
   "lang": "ko",
   "start_url": "/",
   "scope": "/",

@@ -1,6 +1,7 @@
 import {number,position,Decimal,type Trade} from './calculation';
 import {communityPortfolios} from './public-portfolio';
-import {exchangeRate} from './exchange-rate';
+import {exchangeRate,exchangeRates,cachedRates} from './exchange-rate';
+import {marketFilter,stockMarket,portfolioSummary} from './markets';
 interface Env {DB:D1Database;ASSETS:Fetcher;SETUP_TOKEN?:string;ALLOW_HTTP_LOCAL?:string;TWELVE_DATA_API_KEY?:string;QUOTE_DISPLAY_APPROVED?:string}
 type User={id:string;username:string;nickname:string|null;role:string;active:number;revision:number;password_hash:string};
 const now=()=>new Date().toISOString(),id=()=>crypto.randomUUID();
@@ -27,6 +28,7 @@ async function route(r:Request,e:Env):Promise<Response>{
   const local=['localhost','127.0.0.1','[::1]'].includes(url.hostname);
   if(!secure&&!(local&&e.ALLOW_HTTP_LOCAL==='true'))return response({error:'HTTPS가 필요합니다'},403);
   if(path==='/api/exchange-rate')return method==='GET'?response(await exchangeRate(e.DB)):response({error:'지원하지 않는 요청'},405);
+  if(path==='/api/exchange-rates')return method==='GET'?response(await exchangeRates(e.DB)):response({error:'지원하지 않는 요청'},405);
   if(path==='/api/status'){
     const count=await e.DB.prepare('SELECT COUNT(*) AS count FROM users').first<{count:number}>();
     const setting=await e.DB.prepare("SELECT value FROM app_settings WHERE key='account_limit'").first<{value:number}>();
@@ -83,7 +85,7 @@ async function route(r:Request,e:Env):Promise<Response>{
     const setting=await e.DB.prepare("SELECT value FROM app_settings WHERE key='account_limit'").first<{value:number}>();
     return response({accountLimit:setting!.value});
   }
-  if(path==='/api/community/portfolios')return method==='GET'?response(await communityPortfolios(e.DB)):response({error:'전체 투자현황은 조회만 가능합니다'},405);
+  if(path==='/api/community/portfolios')return method==='GET'?response(await communityPortfolios(e.DB,marketFilter(url.searchParams.get('market')))):response({error:'전체 투자현황은 조회만 가능합니다'},405);
   if(path==='/api/me')return response({id:u.id,username:u.username,nickname:u.nickname,needsNickname:!u.nickname,role:u.role,csrf:u.csrf});
   if(path==='/api/logout'&&method==='POST'){await e.DB.prepare('DELETE FROM sessions WHERE token_hash=?').bind(tokenHash).run();return response({ok:true},200,{'Set-Cookie':cookie('',secure,0)})}
   if(path==='/api/password'&&method==='POST'){
@@ -99,21 +101,25 @@ async function route(r:Request,e:Env):Promise<Response>{
     else return response({error:'지원하지 않는 요청'},405);return response({ok:true});
   }
   if(path==='/api/stocks'){
-    if(method==='GET'){const q=(url.searchParams.get('q')||'').slice(0,40);return response(await rows(e.DB,'SELECT * FROM stocks WHERE ticker LIKE ? OR name LIKE ? ORDER BY ticker LIMIT 50','%'+q+'%','%'+q+'%'))}
-    if(method==='POST'){const b=await body(r),ticker=text(b.ticker,15).toUpperCase();if(!/^[A-Z][A-Z0-9.-]{0,14}$/.test(ticker))throw new Error('티커 형식을 확인하세요');const name=text(b.name,100),exchange=text(b.exchange,30);if(!name||!exchange)throw new Error('종목명과 거래소를 입력하세요');await e.DB.prepare("INSERT INTO stocks VALUES (?,?,?,?,'USD') ON CONFLICT(ticker) DO NOTHING").bind(id(),ticker,name,exchange).run();return response(await e.DB.prepare('SELECT * FROM stocks WHERE ticker=?').bind(ticker).first())}
+    if(method==='GET'){const q=(url.searchParams.get('q')||'').slice(0,40),market=marketFilter(url.searchParams.get('market'));return response(await rows(e.DB,'SELECT id,ticker,name,exchange,market,currency FROM stocks WHERE (ticker LIKE ? OR name LIKE ?)'+(market==='ALL'?'':' AND market=?')+' ORDER BY market,ticker LIMIT 50',...market==='ALL'?['%'+q+'%','%'+q+'%']:['%'+q+'%','%'+q+'%',market]));}
+    if(method==='POST'){const b=await body(r),ticker=text(b.ticker,15).toUpperCase(),config=stockMarket(b.market,ticker,b.currency),name=text(b.name,100),exchange=b.exchange?text(b.exchange,30):config.exchange;if(!name||!exchange)throw new Error('종목명과 거래소를 입력하세요');
+      await e.DB.prepare("INSERT INTO stocks(id,identity_key,name,exchange,legacy_currency,ticker,market,currency) VALUES (?,?,?,?,'USD',?,?,?) ON CONFLICT(market,ticker) DO NOTHING").bind(id(),config.market+':'+ticker,name,exchange,ticker,config.market,config.currency).run();
+      return response(await e.DB.prepare('SELECT id,ticker,name,exchange,market,currency FROM stocks WHERE ticker=? AND market=?').bind(ticker,config.market).first());}
   }
   if(path==='/api/portfolio'&&method==='GET'){
     const ts=await trades(e.DB,u.id),settings=await rows<Record<string,any>>(e.DB,'SELECT s.*,o.manual_price,o.price_mode,o.updated_at manual_at,c.price api_price,c.updated_at api_at,c.provided_at,c.delay_note FROM stocks s LEFT JOIN user_price_overrides o ON o.stock_id=s.id AND o.user_id=? LEFT JOIN stock_price_cache c ON c.stock_id=s.id WHERE s.id IN (SELECT stock_id FROM transactions WHERE user_id=? UNION SELECT stock_id FROM user_price_overrides WHERE user_id=?)',u.id,u.id,u.id);
-    const items=settings.map(s=>({...s,position:position(ts.filter(t=>t.stock_id===s.id),s.price_mode==='API'?s.api_price??null:s.manual_price??null)}));
-    let cost=new Decimal(0),value=new Decimal(0),realized=new Decimal(0),missing=0;
-    for(const s of items){cost=cost.plus(s.position.cost);realized=realized.plus(s.position.realized);if(new Decimal(s.position.quantity).gt(0)){if(s.position.value===null)missing++;else value=value.plus(s.position.value)}}
-    const pnl=missing?null:value.minus(cost);return response({items,summary:{cost:cost.toFixed(),value:missing?null:value.toFixed(),pnl:pnl?.toFixed()??null,rate:pnl&&!cost.isZero()?pnl.div(cost).mul(100).toFixed():null,realized:realized.toFixed(),missing}});
+    const market=marketFilter(url.searchParams.get('market'));
+    const items=settings.filter(s=>market==='ALL'||s.market===market).map(s=>({...s,currency:s.currency,position:position(ts.filter(t=>t.stock_id===s.id),s.price_mode==='API'?s.api_price??null:s.manual_price??null)}));
+    return response({items,summary:portfolioSummary(items,await cachedRates(e.DB),market)});
   }
   if(path==='/api/transactions'){
-    if(method==='GET')return response(await rows(e.DB,'SELECT t.*,s.ticker,s.name FROM transactions t JOIN stocks s ON s.id=t.stock_id WHERE user_id=? ORDER BY trade_date,created_at,transaction_id',u.id));
+    if(method==='GET'){const market=marketFilter(url.searchParams.get('market'));return response(await rows(e.DB,'SELECT t.*,s.ticker,s.name,s.market,s.currency FROM transactions t JOIN stocks s ON s.id=t.stock_id WHERE user_id=?'+(market==='ALL'?'':' AND s.market=?')+' ORDER BY trade_date,created_at,transaction_id',...market==='ALL'?[u.id]:[u.id,market]));}
     const b=await body(r),existing=method==='POST'?null:await e.DB.prepare('SELECT * FROM transactions WHERE transaction_id=? AND user_id=?').bind(text(b.transaction_id),u.id).first<Trade&{stock_id:string}>();
     if(method!=='POST'&&!existing)return response({error:'거래를 찾을 수 없습니다'},404);
     const sid=existing?.stock_id||text(b.stock_id),all=await trades(e.DB,u.id,sid),tid=existing?.transaction_id||id();
+    const tradeStock=await e.DB.prepare('SELECT currency FROM stocks WHERE id=?').bind(sid).first<{currency:string}>();
+    if(!tradeStock)return response({error:'종목이 없습니다'},404);
+    if(b.currency!==undefined&&b.currency!==tradeStock.currency)throw new Error('종목의 거래 통화와 입력 통화가 일치하지 않습니다');
     if(method==='POST'){const duplicate=await e.DB.prepare('SELECT * FROM transactions WHERE user_id=? AND request_id=?').bind(u.id,text(b.request_id)).first();if(duplicate)return response(duplicate)}
     if(!['POST','PATCH','DELETE'].includes(method))return response({error:'지원하지 않는 요청'},405);
     if(method==='DELETE'){position(all.filter(t=>t.transaction_id!==tid));await mutate(e.DB,u,[e.DB.prepare('DELETE FROM transactions WHERE transaction_id=? AND user_id=?').bind(tid,u.id)])}
@@ -128,10 +134,11 @@ async function route(r:Request,e:Env):Promise<Response>{
   }
   const match=path.match(/^\/api\/stocks\/([^/]+)\/(price|note|quote)$/);
   if(match){const sid=match[1],action=match[2];if(!await e.DB.prepare('SELECT id FROM stocks WHERE id=?').bind(sid).first())return response({error:'종목이 없습니다'},404);
-    if(action==='price'&&method==='POST'){const b=await body(r);if(!['MANUAL','API'].includes(b.mode))throw new Error('가격 모드를 확인하세요');const prev=await e.DB.prepare('SELECT manual_price FROM user_price_overrides WHERE user_id=? AND stock_id=?').bind(u.id,sid).first<{manual_price:string|null}>(),price=b.price===undefined?prev?.manual_price??null:number(b.price,true);if(b.mode==='MANUAL'&&price===null)throw new Error('수동 현재가를 입력하세요');
+    if(action==='price'&&method==='POST'){const b=await body(r);const marketStock=await e.DB.prepare('SELECT market FROM stocks WHERE id=?').bind(sid).first<{market:string}>();if(b.mode==='API'&&marketStock!.market!=='US')return response({error:'한국장·일본장은 현재가를 직접 입력하세요'},400);if(!['MANUAL','API'].includes(b.mode))throw new Error('가격 모드를 확인하세요');const prev=await e.DB.prepare('SELECT manual_price FROM user_price_overrides WHERE user_id=? AND stock_id=?').bind(u.id,sid).first<{manual_price:string|null}>(),price=b.price===undefined?prev?.manual_price??null:number(b.price,true);if(b.mode==='MANUAL'&&price===null)throw new Error('수동 현재가를 입력하세요');
       await e.DB.prepare('INSERT INTO user_price_overrides VALUES (?,?,?,?,?,?) ON CONFLICT(user_id,stock_id) DO UPDATE SET manual_price=excluded.manual_price,price_mode=excluded.price_mode,updated_at=CASE WHEN ? THEN excluded.updated_at ELSE user_price_overrides.updated_at END').bind(id(),u.id,sid,price,b.mode,now(),b.price===undefined?0:1).run();return response({ok:true});}
     if(action==='note'){if(method==='GET')return response(await e.DB.prepare('SELECT * FROM investment_notes WHERE user_id=? AND stock_id=?').bind(u.id,sid).first()||{content:'',target_price:null,stop_price:null});if(method==='POST'){const b=await body(r);await e.DB.prepare('INSERT INTO investment_notes VALUES (?,?,?,?,?,?) ON CONFLICT(user_id,stock_id) DO UPDATE SET content=excluded.content,target_price=excluded.target_price,stop_price=excluded.stop_price,updated_at=excluded.updated_at').bind(u.id,sid,text(b.content,15000),b.target_price?number(b.target_price,true):null,b.stop_price?number(b.stop_price,true):null,now()).run();return response({ok:true})}}
     if(action==='quote'&&method==='POST'){
+      const marketStock=await e.DB.prepare('SELECT market FROM stocks WHERE id=?').bind(sid).first<{market:string}>();if(marketStock!.market!=='US')return response({error:'한국장·일본장은 현재가를 직접 입력하세요'},400);
       if(!e.TWELVE_DATA_API_KEY||e.QUOTE_DISPLAY_APPROVED!=='true')return response({error:'API가 미설정되어 있습니다. 수동 현재가를 이용하세요'},503);
       const cache=await e.DB.prepare('SELECT * FROM stock_price_cache WHERE stock_id=?').bind(sid).first<{updated_at:string}>();if(cache&&Date.now()-Date.parse(cache.updated_at)<900000)return response({ok:true,cached:true});
       const stock=await e.DB.prepare('SELECT ticker FROM stocks WHERE id=?').bind(sid).first<{ticker:string}>();
@@ -142,5 +149,5 @@ async function route(r:Request,e:Env):Promise<Response>{
   }
   return response({error:'요청 경로가 없습니다'},404);
 }
-export default {scheduled(_controller:ScheduledController,e:Env,ctx:ExecutionContext){ctx.waitUntil(exchangeRate(e.DB).then(result=>{if(result.refreshFailed)console.error('Daily USD/KRW refresh failed; cached rate retained')}));},async fetch(r:Request,e:Env){let res:Response;try{res=await route(r,e)}catch(err){const message=err instanceof Error?err.message:'';res=response({error:message.includes('CONCURRENT_WRITE')?'다른 요청이 먼저 저장되었습니다. 새로고침 후 다시 시도하세요':message.includes('계정은 최대')?'가입 인원이 가득 찼습니다. 관리자에게 문의해 주세요':message.includes('UNIQUE')?'이미 등록된 정보입니다':message.includes('D1')?'데이터 저장 오류가 발생했습니다':message||'처리 중 오류가 발생했습니다'},400)}
+export default {scheduled(_controller:ScheduledController,e:Env,ctx:ExecutionContext){ctx.waitUntil(exchangeRates(e.DB).then(result=>{if(result.USD.refreshFailed||result.JPY.refreshFailed)console.error('Daily USD/KRW refresh failed; cached rate retained')}));},async fetch(r:Request,e:Env){let res:Response;try{res=await route(r,e)}catch(err){const message=err instanceof Error?err.message:'';res=response({error:message.includes('CONCURRENT_WRITE')?'다른 요청이 먼저 저장되었습니다. 새로고침 후 다시 시도하세요':message.includes('계정은 최대')?'가입 인원이 가득 찼습니다. 관리자에게 문의해 주세요':message.includes('UNIQUE')?'이미 등록된 정보입니다':message.includes('D1')?'데이터 저장 오류가 발생했습니다':message||'처리 중 오류가 발생했습니다'},400)}
   const headers=new Headers(res.headers);headers.set('X-Content-Type-Options','nosniff');headers.set('Referrer-Policy','same-origin');headers.set('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");if(['/sw.js','/manifest.webmanifest'].includes(new URL(r.url).pathname))headers.set('Cache-Control','no-cache');if(new URL(r.url).protocol==='https:')headers.set('Strict-Transport-Security','max-age=31536000');return new Response(res.body,{status:res.status,headers});}};
