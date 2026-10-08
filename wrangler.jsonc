@@ -19,5 +19,6 @@
     "ALLOW_HTTP_LOCAL": "true"
   },
   "workers_dev": true,
+  "triggers": {"crons": ["0 0 * * *"]},
   "preview_urls": false
 }

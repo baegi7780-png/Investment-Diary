@@ -1,14 +1,17 @@
+import {formatMoney} from '/currency.mjs';
 import Decimal from '/vendor/decimal.mjs';
 Decimal.set({precision:50});
 const $=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const money=v=>v===null||v===undefined?'현재가 미설정':'$'+new Decimal(v).toFixed(2),pct=v=>v===null||v===undefined?'—':new Decimal(v).toFixed(2)+'%',color=v=>v===null?'':new Decimal(v).isNegative()?'negative':new Decimal(v).isPositive()?'positive':'';
+let fx=null;
+const money=v=>{const pair=formatMoney(v,fx?.rate);return pair.krw?`<span class="money-usd">${pair.usd}</span><span class="money-krw">${pair.krw}</span>`:pair.usd},pct=v=>v===null||v===undefined?'—':new Decimal(v).toFixed(2)+'%',color=v=>v===null?'':new Decimal(v).isNegative()?'negative':new Decimal(v).isPositive()?'positive':'';
 const stamp=v=>v?new Date(v).toLocaleString('ko-KR'):'미설정',today=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`};
 let me=null,portfolio={items:[]},history=[],page='dashboard',selected=null,requestId=null;
 function notify(s){$('#notice').hidden=false;$('#notice').textContent=s;}
-async function api(path,method='GET',data){const r=await fetch('/api'+path,{method,headers:{'Content-Type':'application/json',...(me?{'X-CSRF-Token':me.csrf}:{})},body:data===undefined?undefined:JSON.stringify(data)});const result=await r.json();if(!r.ok){if(r.status===401&&me){me=null;portfolio={items:[]};history=[];$('#view').innerHTML='';$('#public-home').innerHTML='';$('#public-home').hidden=true;$('#show-public').hidden=true;$('#open-login').hidden=true;$('#logout').hidden=true;$('#identity').textContent='';$('#app').hidden=true;$('#nickname-setup').hidden=true;$('#auth').hidden=false;}throw new Error(result.error||'요청 실패')}return result}
+async function api(path,method='GET',data){const r=await fetch('/api'+path,{method,headers:{'Content-Type':'application/json',...(me?{'X-CSRF-Token':me.csrf}:{})},body:data===undefined?undefined:JSON.stringify(data)});const result=await r.json();if(!r.ok){if(r.status===401&&me){me=null;portfolio={items:[]};history=[];$('#view').innerHTML='';$('#public-home').innerHTML='';$('#public-home').hidden=true;$('#show-public').hidden=true;$('#open-login').hidden=true;$('#logout').hidden=true;$('#identity').textContent='';$('#app').hidden=true;$('#nickname-setup').hidden=true;$('#auth').hidden=false;$('#exchange-info').hidden=true;}throw new Error(result.error||'요청 실패')}return result}
 const form=f=>Object.fromEntries(new FormData(f));
 function metric(label,value,cls=''){return `<div class="card metric"><small>${label}</small><strong class="${cls}">${value}</strong></div>`}
-async function refresh(){[portfolio,history]=await Promise.all([api('/portfolio'),api('/transactions')]);render()}
+async function loadExchange(){fx=await api('/exchange-rate').catch(()=>fx);const el=$('#exchange-info');el.hidden=false;el.innerHTML=fx?.rate?`<strong>1 USD = ${new Decimal(fx.rate).toFixed(2)}원</strong><span>${esc(fx.date)} 기준 · Frankfurter${fx.usingCachedRate||fx.refreshFailed?' · 마지막 저장 환율 사용':''}</span><small>현재 환율로 참고 환산 · 환차손익 제외</small>`:'환율을 아직 불러오지 못했습니다. 달러 금액을 표시합니다.';}
+async function refresh(){await loadExchange();[portfolio,history]=await Promise.all([api('/portfolio'),api('/transactions')]);render()}
 let registrationStatus=null;
 function authMode(register=false){$('#login-form').hidden=register;$('#register-form').hidden=!register;$('#signup-invite').hidden=register||!registrationStatus||registrationStatus.setupRequired;$('#auth-heading').innerHTML=register?'<h2>투자의 기록을 시작해요</h2><p>아이디와 비밀번호로 나만의 계정을 만드세요.</p>':'<h2>다시 만나 반가워요</h2><p>계정으로 로그인해 투자 기록을 이어가세요.</p>';if(register){$('#registration-info').textContent=registrationStatus.registrationOpen?(registrationStatus.accountLimit?'관리자 포함 최대 '+registrationStatus.accountLimit+'명까지 가입할 수 있습니다.':'가입 인원 제한이 없습니다.'):'가입 인원이 가득 찼습니다. 관리자에게 문의해 주세요.';$('#register-submit').disabled=!registrationStatus.registrationOpen;$('#register-form').elements.username.focus();}}
 let communityUsers=[];
@@ -16,7 +19,7 @@ async function showPublic(){
   if(!me)return;
   $('#public-home').hidden=false;$('#auth').hidden=true;$('#app').hidden=true;$('#open-login').hidden=false;$('#open-login').textContent=me?'내 투자기록':'로그인';$('#show-public').hidden=true;
   $('#public-home').innerHTML='<div class="panel">투자현황을 불러오는 중입니다.</div>';
-  const result=await api('/community/portfolios');communityUsers=result.users;renderCommunity();
+  await loadExchange();const result=await api('/community/portfolios');communityUsers=result.users;renderCommunity();
 }
 function memberName(u){return u.nickname||u.username}
 function memberAvatar(u){return esc([...memberName(u)][0]?.toUpperCase()||'·')}
@@ -71,7 +74,7 @@ document.addEventListener('submit',async event=>{event.preventDefault();const f=
   else if(f.id==='password-form'){await api('/password','POST',b);location.reload()}
   else if(f.id==='user-form'){await api('/users','POST',b);await admin()}
 }catch(e){notify(e.message)}finally{buttons.forEach(b=>b.disabled=false);if(f.id==='register-form'){registrationStatus=await api('/status').catch(()=>registrationStatus);if(!f.hidden)authMode(true)}}});
-document.addEventListener('input',event=>{if(event.target.closest('#price-form')){const f=$('#price-form'),s=portfolio.items.find(x=>x.id===selected),p=s.position,current=f.elements.mode.value==='API'?s.api_price:f.elements.price.value;try{const value=new Decimal(current).mul(p.quantity),pnl=value.minus(p.cost),rate=new Decimal(p.cost).isZero()?null:pnl.div(p.cost).mul(100).toFixed();$('#price-preview').textContent=`저장 전 미리보기: 평가 ${money(value.toFixed())} · 손익 ${money(pnl.toFixed())} · ${pct(rate)}`}catch{$('#price-preview').textContent='현재가 미설정'}}});
+document.addEventListener('input',event=>{if(event.target.closest('#price-form')){const f=$('#price-form'),s=portfolio.items.find(x=>x.id===selected),p=s.position,current=f.elements.mode.value==='API'?s.api_price:f.elements.price.value;try{const value=new Decimal(current).mul(p.quantity),pnl=value.minus(p.cost),rate=new Decimal(p.cost).isZero()?null:pnl.div(p.cost).mul(100).toFixed();$('#price-preview').textContent=`저장 전 미리보기: 평가 ${formatMoney(value.toFixed(),fx?.rate).usd} · 손익 ${formatMoney(pnl.toFixed(),fx?.rate).usd} · ${pct(rate)}`}catch{$('#price-preview').textContent='현재가 미설정'}}});
 document.addEventListener('change',event=>{if(event.target.id.startsWith('filter-')){const ts=history.filter(t=>(!$('#filter-ticker').value||t.ticker===$('#filter-ticker').value)&&(!$('#filter-type').value||t.type===$('#filter-type').value)&&(!$('#filter-from').value||t.trade_date>=$('#filter-from').value)&&(!$('#filter-to').value||t.trade_date<=$('#filter-to').value));$('#history-table').innerHTML=tradeTable(ts,allProfits())}});
 let searchTimer;$('#stock-search').addEventListener('input',()=>{clearTimeout(searchTimer);searchTimer=setTimeout(async()=>{try{const stocks=await api('/stocks?q='+encodeURIComponent($('#stock-search').value));$('#search-results').innerHTML=stocks.map(s=>`<button type="button" class="btn btn-sm btn-outline-secondary m-1" data-choose-stock="${s.id}">${esc(s.ticker)} · ${esc(s.name)}</button>`).join('')}catch(e){notify(e.message)}},250)});
 function applyTheme(theme){document.documentElement.dataset.bsTheme=theme;localStorage.setItem('journal-theme',theme);$('#theme').textContent=theme==='dark'?'라이트 모드':'다크 모드';document.querySelector('meta[name="theme-color"]').content=theme==='dark'?'#111715':'#f6f7f9'}

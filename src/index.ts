@@ -1,5 +1,6 @@
 import {number,position,Decimal,type Trade} from './calculation';
 import {communityPortfolios} from './public-portfolio';
+import {exchangeRate} from './exchange-rate';
 interface Env {DB:D1Database;ASSETS:Fetcher;SETUP_TOKEN?:string;ALLOW_HTTP_LOCAL?:string;TWELVE_DATA_API_KEY?:string;QUOTE_DISPLAY_APPROVED?:string}
 type User={id:string;username:string;nickname:string|null;role:string;active:number;revision:number;password_hash:string};
 const now=()=>new Date().toISOString(),id=()=>crypto.randomUUID();
@@ -25,6 +26,7 @@ async function route(r:Request,e:Env):Promise<Response>{
   if(method!=='GET'&&r.headers.get('Origin')!==url.origin)return response({error:'요청 출처를 확인할 수 없습니다'},403);
   const local=['localhost','127.0.0.1','[::1]'].includes(url.hostname);
   if(!secure&&!(local&&e.ALLOW_HTTP_LOCAL==='true'))return response({error:'HTTPS가 필요합니다'},403);
+  if(path==='/api/exchange-rate')return method==='GET'?response(await exchangeRate(e.DB)):response({error:'지원하지 않는 요청'},405);
   if(path==='/api/status'){
     const count=await e.DB.prepare('SELECT COUNT(*) AS count FROM users').first<{count:number}>();
     const setting=await e.DB.prepare("SELECT value FROM app_settings WHERE key='account_limit'").first<{value:number}>();
@@ -140,5 +142,5 @@ async function route(r:Request,e:Env):Promise<Response>{
   }
   return response({error:'요청 경로가 없습니다'},404);
 }
-export default {async fetch(r:Request,e:Env){let res:Response;try{res=await route(r,e)}catch(err){const message=err instanceof Error?err.message:'';res=response({error:message.includes('CONCURRENT_WRITE')?'다른 요청이 먼저 저장되었습니다. 새로고침 후 다시 시도하세요':message.includes('계정은 최대')?'가입 인원이 가득 찼습니다. 관리자에게 문의해 주세요':message.includes('UNIQUE')?'이미 등록된 정보입니다':message.includes('D1')?'데이터 저장 오류가 발생했습니다':message||'처리 중 오류가 발생했습니다'},400)}
+export default {scheduled(_controller:ScheduledController,e:Env,ctx:ExecutionContext){ctx.waitUntil(exchangeRate(e.DB).then(result=>{if(result.refreshFailed)console.error('Daily USD/KRW refresh failed; cached rate retained')}));},async fetch(r:Request,e:Env){let res:Response;try{res=await route(r,e)}catch(err){const message=err instanceof Error?err.message:'';res=response({error:message.includes('CONCURRENT_WRITE')?'다른 요청이 먼저 저장되었습니다. 새로고침 후 다시 시도하세요':message.includes('계정은 최대')?'가입 인원이 가득 찼습니다. 관리자에게 문의해 주세요':message.includes('UNIQUE')?'이미 등록된 정보입니다':message.includes('D1')?'데이터 저장 오류가 발생했습니다':message||'처리 중 오류가 발생했습니다'},400)}
   const headers=new Headers(res.headers);headers.set('X-Content-Type-Options','nosniff');headers.set('Referrer-Policy','same-origin');headers.set('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");if(['/sw.js','/manifest.webmanifest'].includes(new URL(r.url).pathname))headers.set('Cache-Control','no-cache');if(new URL(r.url).protocol==='https:')headers.set('Strict-Transport-Security','max-age=31536000');return new Response(res.body,{status:res.status,headers});}};
