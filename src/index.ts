@@ -139,6 +139,20 @@ async function route(r:Request,e:Env):Promise<Response>{
     }
     return response({ok:true});
   }
+  const deletion=path.match(/^\/api\/stocks\/([^/]+)\/records$/);
+  if(deletion){
+    if(method!=='DELETE')return response({error:'지원하지 않는 요청'},405);
+    const sid=deletion[1],stock=await e.DB.prepare('SELECT ticker FROM stocks WHERE id=?').bind(sid).first<{ticker:string}>();
+    const owned=await e.DB.prepare('SELECT stock_id FROM transactions WHERE user_id=? AND stock_id=? UNION SELECT stock_id FROM investment_notes WHERE user_id=? AND stock_id=? UNION SELECT stock_id FROM user_price_overrides WHERE user_id=? AND stock_id=?').bind(u.id,sid,u.id,sid,u.id,sid).first();
+    if(!stock||!owned)return response({error:'내 투자기록을 찾을 수 없습니다'},404);
+    const b=await body(r);if(b.confirmTicker!==stock.ticker)return response({error:'삭제할 종목코드를 정확히 입력하세요'},400);
+    await mutate(e.DB,u,[
+      e.DB.prepare('DELETE FROM transactions WHERE user_id=? AND stock_id=?').bind(u.id,sid),
+      e.DB.prepare('DELETE FROM investment_notes WHERE user_id=? AND stock_id=?').bind(u.id,sid),
+      e.DB.prepare('DELETE FROM user_price_overrides WHERE user_id=? AND stock_id=?').bind(u.id,sid)
+    ]);
+    return response({ok:true});
+  }
   const match=path.match(/^\/api\/stocks\/([^/]+)\/(price|note|quote)$/);
   if(match){const sid=match[1],action=match[2];if(!await e.DB.prepare('SELECT id FROM stocks WHERE id=?').bind(sid).first())return response({error:'종목이 없습니다'},404);
     if(action==='price'&&method==='POST'){const b=await body(r);const marketStock=await e.DB.prepare('SELECT market FROM stocks WHERE id=?').bind(sid).first<{market:string}>();if(b.mode==='API'&&marketStock!.market!=='US')return response({error:'한국장·일본장은 현재가를 직접 입력하세요'},400);if(!['MANUAL','API'].includes(b.mode))throw new Error('가격 모드를 확인하세요');const prev=await e.DB.prepare('SELECT manual_price FROM user_price_overrides WHERE user_id=? AND stock_id=?').bind(u.id,sid).first<{manual_price:string|null}>(),price=b.price===undefined?prev?.manual_price??null:number(b.price,true);if(b.mode==='MANUAL'&&price===null)throw new Error('수동 현재가를 입력하세요');
