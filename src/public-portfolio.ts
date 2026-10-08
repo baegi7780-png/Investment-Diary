@@ -17,6 +17,6 @@ export async function portfolioOverview(db:D1Database,ownerId:string){
   return {available:true,items,summary:{cost:cost.toFixed(),value:missing?null:value.toFixed(),pnl:pnl?.toFixed()??null,rate:pnl&&!cost.isZero()?pnl.div(cost).mul(100).toFixed():null,missing}};
 }
 export async function communityPortfolios(db:D1Database){
-  const users=(await db.prepare('SELECT id,username,role FROM users WHERE active=1 ORDER BY created_at,id').all<{id:string;username:string;role:string}>()).results;
-  return {users:await Promise.all(users.map(async user=>({username:user.username,role:user.role,...await portfolioOverview(db,user.id)})))};
+  const users=(await db.prepare('SELECT id,username,nickname,role FROM users WHERE active=1 ORDER BY created_at,id').all<{id:string;username:string;nickname:string|null;role:string}>()).results;
+  return {users:await Promise.all(users.map(async user=>({username:user.username,nickname:user.nickname,role:user.role,...await portfolioOverview(db,user.id)})))};
 }

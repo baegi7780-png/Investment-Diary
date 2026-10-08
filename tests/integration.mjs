@@ -11,6 +11,10 @@ class Client{
 const a=new Client(),b=new Client(),guest=new Client();
 await a.ok('/setup','POST',{token:setup,username:'test_admin',password:'Admin-test-pass-123'});
 await a.login('test_admin','Admin-test-pass-123');
+assert.equal((await a.ok('/me')).needsNickname,true);assert.equal((await a.call('/community/portfolios')).status,409);
+assert.equal((await guest.call('/profile','POST',{nickname:'외부사용자'})).status,401);
+for(const nickname of ['','가','<script>alert(1)</script>'])assert.equal((await a.call('/profile','POST',{nickname})).status,400);
+await a.ok('/profile','POST',{nickname:'투자대장'});assert.equal((await a.ok('/me')).needsNickname,false);
 await a.ok('/users','POST',{username:'test_user',password:'User-test-pass-123'});
 const stock=await a.ok('/stocks','POST',{ticker:'NVDA',name:'NVIDIA',exchange:'NASDAQ'});
 const buy1={stock_id:stock.id,type:'BUY',price:'180',quantity:'5',fee:'0',trade_date:'2026-10-01',reason:'AI 데이터센터 성장',memo:'',request_id:crypto.randomUUID()};
@@ -26,7 +30,9 @@ const shared=(await a.ok('/community/portfolios')).users.find(u=>u.username==='t
 for(const hidden of ['user_id','transaction_id','reason','memo','profits','password_hash','csrf','request_id'])assert.ok(!JSON.stringify(shared).includes(hidden),'shared payload excludes '+hidden);
 assert.equal((await a.call('/community/portfolios','POST',{})).status,405);assert.equal((await a.call('/public/portfolio')).status,404);
 await a.ok('/logout','POST',{});await a.login('test_admin','Admin-test-pass-123');assert.equal((await a.ok('/portfolio')).items[0].manual_price,'200');
-await b.login('test_user','User-test-pass-123');assert.equal((await b.ok('/transactions')).length,0);assert.equal((await b.ok('/portfolio')).items.length,0);
+assert.equal((await a.ok('/me')).nickname,'투자대장');assert.equal((await a.ok('/community/portfolios')).users.find(u=>u.username==='test_admin').nickname,'투자대장');
+await b.login('test_user','User-test-pass-123');assert.equal((await b.ok('/me')).needsNickname,true);assert.equal((await b.call('/profile','POST',{nickname:'투자대장'})).status,400);await b.ok('/profile','POST',{nickname:'해외주식러'});assert.equal((await b.ok('/transactions')).length,0);assert.equal((await b.ok('/portfolio')).items.length,0);
+await a.ok('/profile','POST',{nickname:'장기투자자',user_id:(await b.ok('/me')).id});assert.equal((await b.ok('/me')).nickname,'해외주식러');assert.equal((await a.ok('/me')).nickname,'장기투자자');
 const ta=await a.ok('/transactions');assert.equal((await b.call('/transactions','DELETE',{transaction_id:ta[0].transaction_id})).status,404);
 assert.equal((await b.call('/users')).status,403);assert.equal((await guest.call('/portfolio')).status,401);
 const stolenCsrf=a.csrf;a.csrf='wrong';assert.equal((await a.call(`/stocks/${stock.id}/price`,'POST',{mode:'MANUAL',price:'300'})).status,403);a.csrf=stolenCsrf;

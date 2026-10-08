@@ -1,7 +1,7 @@
 import {number,position,Decimal,type Trade} from './calculation';
 import {communityPortfolios} from './public-portfolio';
 interface Env {DB:D1Database;ASSETS:Fetcher;SETUP_TOKEN?:string;ALLOW_HTTP_LOCAL?:string;TWELVE_DATA_API_KEY?:string;QUOTE_DISPLAY_APPROVED?:string}
-type User={id:string;username:string;role:string;active:number;revision:number;password_hash:string};
+type User={id:string;username:string;nickname:string|null;role:string;active:number;revision:number;password_hash:string};
 const now=()=>new Date().toISOString(),id=()=>crypto.randomUUID();
 const response=(data:unknown,status=200,headers:Record<string,string>={})=>Response.json(data,{status,headers:{'Cache-Control':'no-store',...headers}});
 const text=(v:unknown,max=200)=>{if(typeof v!=='string'||v.length>max)throw new Error('입력 길이나 형식을 확인하세요');return v.trim()};
@@ -47,8 +47,14 @@ async function route(r:Request,e:Env):Promise<Response>{
   if(!session)return response({error:'로그인이 필요합니다'},401);
   const u=session;
   if(method!=='GET'&&!equal(r.headers.get('X-CSRF-Token')||'',session.csrf))return response({error:'CSRF 토큰이 올바르지 않습니다'},403);
+  if(path==='/api/profile'&&method==='POST'){
+    const b=await body(r),nickname=text(b.nickname,100).normalize('NFKC').replace(/ +/g,' ');
+    if([...nickname].length<2||[...nickname].length>20||!/^\p{L}[\p{L}\p{N} ._-]*$|^\p{N}[\p{L}\p{N} ._-]*$/u.test(nickname))throw new Error('닉네임은 2~20자이며 한글·영문·숫자·공백·._-를 사용할 수 있습니다. 첫 글자는 문자나 숫자여야 합니다');
+    await e.DB.prepare('UPDATE users SET nickname=?,nickname_key=? WHERE id=?').bind(nickname,nickname.toLocaleLowerCase('en-US'),u.id).run();return response({ok:true,nickname});
+  }
+  if(!u.nickname&&!['/api/me','/api/logout'].includes(path))return response({error:'닉네임을 먼저 설정해주세요'},409);
   if(path==='/api/community/portfolios')return method==='GET'?response(await communityPortfolios(e.DB)):response({error:'전체 투자현황은 조회만 가능합니다'},405);
-  if(path==='/api/me')return response({id:u.id,username:u.username,role:u.role,csrf:u.csrf});
+  if(path==='/api/me')return response({id:u.id,username:u.username,nickname:u.nickname,needsNickname:!u.nickname,role:u.role,csrf:u.csrf});
   if(path==='/api/logout'&&method==='POST'){await e.DB.prepare('DELETE FROM sessions WHERE token_hash=?').bind(tokenHash).run();return response({ok:true},200,{'Set-Cookie':cookie('',secure,0)})}
   if(path==='/api/password'&&method==='POST'){
     const b=await body(r);if(!equal(await hash(text(b.current,128),u.password_hash.split(':')[0]),u.password_hash))throw new Error('현재 비밀번호가 맞지 않습니다');
@@ -56,7 +62,7 @@ async function route(r:Request,e:Env):Promise<Response>{
   }
   if(path==='/api/users'){
     if(u.role!=='ADMIN')return response({error:'관리자 권한이 필요합니다'},403);
-    if(method==='GET')return response(await rows(e.DB,'SELECT id,username,role,active FROM users ORDER BY created_at'));
+    if(method==='GET')return response(await rows(e.DB,'SELECT id,username,nickname,role,active FROM users ORDER BY created_at'));
     const b=await body(r);
     if(method==='POST'){const name=text(b.username,40);if(!/^[a-zA-Z0-9_.-]{3,40}$/.test(name))throw new Error('아이디 형식을 확인하세요');await e.DB.prepare("INSERT INTO users(id,username,password_hash,role,created_at) VALUES (?,?,?,'USER',?)").bind(id(),name,await hash(password(b.password)),now()).run()}
     else if(method==='PATCH'){if(b.id===u.id)throw new Error('자기 관리자 계정은 비활성화할 수 없습니다');if(typeof b.active!=='boolean')throw new Error('활성 상태를 확인하세요');await e.DB.batch([e.DB.prepare("UPDATE users SET active=? WHERE id=? AND role='USER'").bind(b.active?1:0,text(b.id)),e.DB.prepare('DELETE FROM sessions WHERE user_id=?').bind(b.id)])}
